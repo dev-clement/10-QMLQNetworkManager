@@ -1,0 +1,163 @@
+= REST with QML and QNetworkManager
+In this article, we'll see how to use the QNetworkManager in the back-end of the QML application
+
+:toc:
+:sectnums:
+
+== Introduction
+In this article, we'll create a simple client with REST in order to download JSON data from the internet from an Http server, we'll be downloading data from the Cpp side and feeding that into the QML part for the user to see them.
+
+== Architecture
+For this application, we'll do a basic Cpp Qt QML application which is split into several part such as:
+
+=== Cpp class
+The Cpp class is going to be a class that inherits from `QObject` with some `Q_INVOKABLE` method so we'll be able to use them on the `QML` side of the app:
+
+```cpp
+class AppWrapper : public QObject {
+    Q_OBJECT
+public:
+    explicit AppWrapper(QObject *po_parent);
+    Q_INVOKABLE void fetchPosts();
+    Q_INVOKABLE void removeLast();
+    bool initialize(QGuiApplication *po_app);
+
+private slots:
+    void dataReadyRead();
+    void dataReadFinished();
+    
+
+private:
+    void resetModel();
+    
+private:
+    std::unique_ptr<QNetworkAccessManager> _netMgr;
+    QNetworkReply *_reply;
+    QBytdeArray _dataBuffer;
+    QStringList _posts;
+    QApplicationEngine _engine;
+};
+```
+
+=== Q_OBJECT
+The `Q_OBJECT` macro let you declare this class for the `QMetaObject` compiler for it to create signals, slots mechanism.
+
+=== Q_INVOKABLE
+The `Q_INVOKABLE` macro let you extend this class to be used on the `QML` side of the app.
+
+=== QNetworkAccessManager
+The Network API Manager is constructed with the `QNetworkAccessManager` object, which holds the common configuration and setting for the requests it sends. It contains a proxy and cache configuration, as well as the signals related to them, and also a reply signals that can be used to monitor the the progress of a network operation. 
+
+NOTE: One QNetworkManager instance should be enough for the whole Qt application. Since QNetworkManager is based on a link:https://doc.qt.io/qt-6/qobject.html[QObject], it can only be used for the thread it belongs to.
+
+=== Using the QNetworkAccessManager
+In order to download of the network, a simple code like this is enough:
+
+```cpp
+QNetworkAccessManager *manager = new QNetworkAccessManager(this);
+connect(manager, &QNetworkAccessManager::finished,
+        this, &MyClass::replyFinished);
+manager->get(QNetworkRequest(QUrl("http://qt-project.org")));
+```
+
+NOTE: QNetworkAccessManager has an asynchornous API. Meaning that when the `replyFinished` slot above is called, the parameter it takes is the `QNetworkReply` object that contains the downloaded data as well as the meta-data (header, etc ...)
+
+NOTE: This is the responsibility of the user to delete the `QNetworkReply` object at the appropriate time. Do not directly delete it inside the slot that is connected to the `finished` signal. Instead, make use of the `deleteLater()` function. 
+
+NOTE: QNetworkAccessManager queues the requests it receives. The number of requests executed in parallel is dependent on the protocol. Currently on the HTTP protocol on desktop platform, 6 requests are executed in parallel for host/port conbination.
+
+WARNING: The `QNetworkAccessManager` doesn't handle the RFC 2616. In that, it doesn't react to incoming data until its done writing. For instance, the upload of a large file won't stop even if the client returned a status code that instructs the client to not continue.
+
+==== A more involved example
+In this example, we state that the `QNetworkAccessManager` is already created and work correctly:
+```cpp
+QNetworkRequest request;
+request.setUrl(QUrl("http://qt-project.org"));
+request.setRawHeader("User-Agent", "MyOwnBrowser 1.0");
+
+QNetworkReply *reply = manager->get(request);
+connect(reply, &QIODevice::readyRead, this, &MyClass::slotReadyRead);
+connect(reply, &QNetworkReply::errorOccurred,
+     this, &MyClass::slotError);
+connect(reply, &QNetworkReply::sslErrors,
+     this, &MyClass::slotSslErrors);
+```
+
+==== Receiving data
+Once you have the `QNetworkAccessManager` returning data to you, something you note is that it won't return all the data in one chunk, it will return X pieces of data, that's why you should use some rounded buffer to fetch the data. 
+
+IMPORTANT: Still, the data will be fetched in the good order. That's why you should use a Buffer for getting the data.
+
+=== Intent
+This class will do all the heavy-lifting of the application for it to pull and fetch the data across HTTP to consue the API and then let the QML side to display them.
+
+== Application
+This part is about the application and all the context related to this article, it will show all how we can use `QNetworkAccessManager` in order to fetch information from a JSON http server and how we can display this intel inside of the `QML` part of the application.
+
+=== AppWrapper
+As explained above, the `AppWrapper` is going to do all the heavy-lifting of the application in order to handle all the backend-side of it:
+
+* Using this method to fetch posts that have been fetched to the `API endpoint`.
+* Using this method to remove the last element of the list that is returned by this application in the `QML` side.
+
+=== Main.qml
+As you can see, in the `AppWrapper` class there is some methods that can be invoked in the `QML` directly which are the following ones:
+
+```cpp
+Q_INVOKABLE void fetchPosts();
+Q_INVOKABLE void removeLast();
+```
+
+Both of these methods are then created in the `cpp` file and also used in the `qml`:
+
+```qml
+ListView {
+    ...
+    model: myModel
+    delegate: Rectangle {
+        ...
+        Text {
+            ...
+            text: modelData
+            ...
+        }
+    }
+
+    ...
+}
+
+Button {
+    ...
+    onClicked: function() {
+        Wrapper.fetchPosts()
+    }
+}
+
+Button {
+    ...
+    onClicked: function() {
+        Wrapper.removeLast()
+    }
+}
+```
+
+NOTE: As said above, the `Wrapper` is the name of the class we define in the engine root context.
+
+=== main.cpp
+
+The `main.cpp` is created by `QtCreator` by default and do all the initialization of the QML side. Nevertheless, all the initialization is done through the `AppWrapper` class, we can now, do the following in the `main.cpp`:
+
+```cpp
+int main(int argc, char *argv[])
+{
+    QGuiApplication app(argc, argv);
+    QQuickStyle::setStyle("Material");
+
+    AppWrapper appWrapper;
+    if (!appWrapper.initialized(&app)) {
+        return -1;
+    }
+
+    return app.exec();
+}
+```
